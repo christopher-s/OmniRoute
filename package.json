@@ -62,7 +62,7 @@
     "test:vitest": "vitest run open-sse/mcp-server/__tests__/*.test.ts open-sse/services/autoCombo/__tests__/*.test.ts vscode-extension/src/__tests__/*.test.ts",
     "test:ecosystem": "node scripts/run-ecosystem-tests.mjs",
     "test:coverage": "npx c8 --exclude=open-sse --check-coverage --lines 50 --functions 50 --branches 50 node --import tsx/esm --test tests/unit/*.test.mjs",
-    "test:all": "npm run test:unit && npm run test:vitest && npm run test:e2e",
+    "test:all": "npm run test:unit && npm run test:vitest && npm run test:ecosystem && npm run test:e2e",
     "check": "npm run lint && npm run test",
     "prepublishOnly": "npm run build:cli",
     "postinstall": "node scripts/postinstall.mjs",

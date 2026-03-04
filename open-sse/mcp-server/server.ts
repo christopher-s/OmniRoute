@@ -37,6 +37,7 @@ import {
   handleExplainRoute,
   handleGetSessionSnapshot,
 } from "./tools/advancedTools.ts";
+import { normalizeQuotaResponse } from "@/shared/contracts/quota";
 
 // ============ Configuration ============
 
@@ -105,7 +106,12 @@ async function handleGetHealth() {
 async function handleListCombos(args: { includeMetrics?: boolean }) {
   const start = Date.now();
   try {
-    const combos = (await omniRouteFetch("/api/combos")) as any;
+    const combosRaw = (await omniRouteFetch("/api/combos")) as any;
+    const combos = Array.isArray(combosRaw?.combos)
+      ? combosRaw.combos
+      : Array.isArray(combosRaw)
+        ? combosRaw
+        : [];
     let metrics: Record<string, unknown> = {};
     if (args.includeMetrics) {
       metrics = (await omniRouteFetch("/api/combos/metrics").catch(() => ({}))) as Record<
@@ -174,10 +180,10 @@ async function handleCheckQuota(args: { provider?: string; connectionId?: string
     if (args.connectionId) path += `?connectionId=${encodeURIComponent(args.connectionId)}`;
     else if (args.provider) path += `?provider=${encodeURIComponent(args.provider)}`;
 
-    const raw = (await omniRouteFetch(path)) as any;
-    const result = {
-      providers: Array.isArray(raw?.providers) ? raw.providers : Array.isArray(raw) ? raw : [],
-    };
+    const result = normalizeQuotaResponse(await omniRouteFetch(path), {
+      provider: args.provider || null,
+      connectionId: args.connectionId || null,
+    });
 
     await logToolCall("omniroute_check_quota", args, result, Date.now() - start, true);
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };

@@ -50,11 +50,11 @@ describe("E2E: MCP Server (16 tools)", () => {
   });
 
   itCase("should return quota data", async () => {
-    const res = await apiFetch("/api/rate-limits");
+    const res = await apiFetch("/api/usage/quota");
     expect(res.ok).toBe(true);
     const data = await res.json();
-    expect(Array.isArray(data?.connections)).toBe(true);
-    expect(data).toHaveProperty("overview");
+    expect(Array.isArray(data?.providers)).toBe(true);
+    expect(data).toHaveProperty("meta");
   });
 
   itCase("should return usage analytics", async () => {
@@ -65,6 +65,64 @@ describe("E2E: MCP Server (16 tools)", () => {
   itCase("should return model catalog", async () => {
     const res = await apiFetch("/api/models");
     expect(res.ok).toBe(true);
+  });
+});
+
+// ─── Scenario 1B: Quota Contract ─────────────────────────────
+describe("E2E: Quota Contract (/api/usage/quota)", () => {
+  itCase("should return normalized quota response shape", async () => {
+    const res = await apiFetch("/api/usage/quota");
+    expect(res.ok).toBe(true);
+
+    const data = await res.json();
+    expect(Array.isArray(data.providers)).toBe(true);
+    expect(data).toHaveProperty("meta");
+    expect(typeof data.meta.generatedAt).toBe("string");
+    expect(typeof data.meta.totalProviders).toBe("number");
+
+    if (data.providers.length > 0) {
+      const p = data.providers[0];
+      expect(typeof p.name).toBe("string");
+      expect(typeof p.provider).toBe("string");
+      expect(typeof p.connectionId).toBe("string");
+      expect(typeof p.quotaUsed).toBe("number");
+      expect(typeof p.percentRemaining).toBe("number");
+      expect(p.percentRemaining).toBeGreaterThanOrEqual(0);
+      expect(p.percentRemaining).toBeLessThanOrEqual(100);
+      expect(["valid", "expiring", "expired", "refreshing"]).toContain(p.tokenStatus);
+    }
+  });
+
+  itCase("should filter quota by provider", async () => {
+    const allRes = await apiFetch("/api/usage/quota");
+    expect(allRes.ok).toBe(true);
+    const allData = await allRes.json();
+    if (!Array.isArray(allData.providers) || allData.providers.length === 0) return;
+
+    const provider = allData.providers[0].provider;
+    const filteredRes = await apiFetch(`/api/usage/quota?provider=${encodeURIComponent(provider)}`);
+    expect(filteredRes.ok).toBe(true);
+    const filteredData = await filteredRes.json();
+    expect(filteredData.meta.filters.provider).toBe(provider);
+    expect(Array.isArray(filteredData.providers)).toBe(true);
+    expect(filteredData.providers.every((p: any) => p.provider === provider)).toBe(true);
+  });
+
+  itCase("should filter quota by connectionId", async () => {
+    const allRes = await apiFetch("/api/usage/quota");
+    expect(allRes.ok).toBe(true);
+    const allData = await allRes.json();
+    if (!Array.isArray(allData.providers) || allData.providers.length === 0) return;
+
+    const connectionId = allData.providers[0].connectionId;
+    const filteredRes = await apiFetch(
+      `/api/usage/quota?connectionId=${encodeURIComponent(connectionId)}`
+    );
+    expect(filteredRes.ok).toBe(true);
+    const filteredData = await filteredRes.json();
+    expect(filteredData.meta.filters.connectionId).toBe(connectionId);
+    expect(Array.isArray(filteredData.providers)).toBe(true);
+    expect(filteredData.providers.every((p: any) => p.connectionId === connectionId)).toBe(true);
   });
 });
 
@@ -174,7 +232,7 @@ describe("E2E: Stress (100 parallel requests)", () => {
 
   itStress("should handle 50 parallel quota checks", async () => {
     const promises = Array.from({ length: 50 }, () =>
-      apiFetch("/api/rate-limits").then((r) => r.ok)
+      apiFetch("/api/usage/quota").then((r) => r.ok)
     );
     const results = await Promise.allSettled(promises);
     const successful = results.filter((r) => r.status === "fulfilled" && r.value).length;

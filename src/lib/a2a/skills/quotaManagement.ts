@@ -6,6 +6,7 @@
  */
 
 import type { A2ATask, TaskArtifact } from "../taskManager";
+import { normalizeQuotaResponse } from "@/shared/contracts/quota";
 
 const OMNIROUTE_BASE_URL = process.env.OMNIROUTE_BASE_URL || "http://localhost:20128";
 const OMNIROUTE_API_KEY = process.env.OMNIROUTE_API_KEY || "";
@@ -34,20 +35,42 @@ export async function executeQuotaManagement(task: A2ATask): Promise<QuotaManage
     quotaFetch("/api/combos"),
   ]);
 
-  const quota = quotaRaw.status === "fulfilled" ? (quotaRaw.value as any) : {};
-  const combos = combosRaw.status === "fulfilled" ? (combosRaw.value as any[]) : [];
-  const providers: any[] = quota?.providers || (Array.isArray(quota) ? quota : []);
+  const quota =
+    quotaRaw.status === "fulfilled"
+      ? normalizeQuotaResponse(quotaRaw.value)
+      : normalizeQuotaResponse({});
+  const combos =
+    combosRaw.status === "fulfilled"
+      ? Array.isArray((combosRaw.value as any)?.combos)
+        ? (combosRaw.value as any).combos
+        : Array.isArray(combosRaw.value)
+          ? (combosRaw.value as any[])
+          : []
+      : [];
+  const providers = quota.providers;
+
+  const availableQuota = (provider: { quotaTotal: number | null; quotaUsed: number }) => {
+    if (provider.quotaTotal === null) return Number.POSITIVE_INFINITY;
+    return provider.quotaTotal - provider.quotaUsed;
+  };
 
   // Query classification
   if (query.includes("ranking") || query.includes("most quota") || query.includes("best")) {
-    const sorted = [...providers].sort(
-      (a, b) => b.quotaTotal - b.quotaUsed - (a.quotaTotal - a.quotaUsed)
-    );
+    const sorted = [...providers].sort((a, b) => availableQuota(b) - availableQuota(a));
     return {
       artifacts: [
         {
           type: "text",
-          content: `**Quota Ranking (most available first):**\n${sorted.map((p, i) => `${i + 1}. **${p.provider}** — ${(p.quotaTotal - p.quotaUsed).toLocaleString()} remaining (${Math.round(((p.quotaTotal - p.quotaUsed) / (p.quotaTotal || 1)) * 100)}%)`).join("\n")}`,
+          content: `**Quota Ranking (most available first):**\n${sorted
+            .map((p, i) => {
+              const remaining = availableQuota(p);
+              const remainingLabel =
+                remaining === Number.POSITIVE_INFINITY ? "unlimited" : remaining.toLocaleString();
+              const percentLabel =
+                p.quotaTotal === null ? "n/a" : `${Math.round(p.percentRemaining)}%`;
+              return `${i + 1}. **${p.provider}** — ${remainingLabel} remaining (${percentLabel})`;
+            })
+            .join("\n")}`,
         },
       ],
       metadata: { queryType: "ranking", providers: sorted.map((p) => p.provider) },
@@ -76,13 +99,20 @@ export async function executeQuotaManagement(task: A2ATask): Promise<QuotaManage
   // Default: general quota summary
   const totalUsed = providers.reduce((sum, p) => sum + (p.quotaUsed || 0), 0);
   const totalAvailable = providers.reduce((sum, p) => sum + (p.quotaTotal || 0), 0);
-  const warnings = providers.filter((p) => p.quotaTotal && p.quotaUsed / p.quotaTotal > 0.9);
+  const warnings = providers.filter((p) => p.percentRemaining <= 10);
 
   return {
     artifacts: [
       {
         type: "text",
-        content: `**Quota Summary (${providers.length} providers):**\n- Total used: ${totalUsed.toLocaleString()} / ${totalAvailable.toLocaleString()}\n${providers.map((p) => `- **${p.provider}:** ${p.quotaUsed?.toLocaleString() || 0} / ${p.quotaTotal?.toLocaleString() || "∞"} (${p.tokenStatus || "ok"})`).join("\n")}${warnings.length > 0 ? `\n\n⚠️ **Warning:** ${warnings.map((w) => w.provider).join(", ")} above 90% usage` : ""}`,
+        content: `**Quota Summary (${providers.length} providers):**\n- Total used: ${totalUsed.toLocaleString()} / ${totalAvailable.toLocaleString()}\n${providers
+          .map(
+            (p) =>
+              `- **${p.provider}:** ${p.quotaUsed.toLocaleString()} / ${p.quotaTotal?.toLocaleString() || "∞"} (${p.tokenStatus})`
+          )
+          .join(
+            "\n"
+          )}${warnings.length > 0 ? `\n\n⚠️ **Warning:** ${warnings.map((w) => w.provider).join(", ")} at or below 10% remaining` : ""}`,
       },
     ],
     metadata: { queryType: "summary", providerCount: providers.length, warnings: warnings.length },

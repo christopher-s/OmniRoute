@@ -14,6 +14,7 @@
  */
 
 import { logToolCall } from "../audit.ts";
+import { normalizeQuotaResponse } from "@/shared/contracts/quota";
 
 const OMNIROUTE_BASE_URL = process.env.OMNIROUTE_BASE_URL || "http://localhost:20128";
 const OMNIROUTE_API_KEY = process.env.OMNIROUTE_API_KEY || "";
@@ -31,6 +32,14 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<unknow
     throw new Error(`API [${response.status}]: ${text}`);
   }
   return response.json();
+}
+
+function normalizeCombosResponse(raw: unknown): any[] {
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object" && Array.isArray((raw as any).combos)) {
+    return (raw as any).combos;
+  }
+  return [];
 }
 
 // ============ In-Memory State ============
@@ -77,9 +86,12 @@ export async function handleSimulateRoute(args: {
       apiFetch("/api/usage/quota"),
     ]);
 
-    const combos = combosRaw.status === "fulfilled" ? (combosRaw.value as any[]) : [];
+    const combos = combosRaw.status === "fulfilled" ? normalizeCombosResponse(combosRaw.value) : [];
     const health = healthRaw.status === "fulfilled" ? (healthRaw.value as any) : {};
-    const quota = quotaRaw.status === "fulfilled" ? (quotaRaw.value as any) : {};
+    const quota =
+      quotaRaw.status === "fulfilled"
+        ? normalizeQuotaResponse(quotaRaw.value)
+        : normalizeQuotaResponse({});
 
     // Find target combo
     const targetCombo = args.combo
@@ -97,7 +109,7 @@ export async function handleSimulateRoute(args: {
 
     const models = targetCombo.models || targetCombo.data?.models || [];
     const breakers = health?.circuitBreakers || [];
-    const providers = quota?.providers || (Array.isArray(quota) ? quota : []);
+    const providers = quota.providers;
 
     // Simulate path
     const simulatedPath = models.map((m: any, idx: number) => {
@@ -233,7 +245,7 @@ export async function handleTestCombo(args: { comboId: string; testPrompt: strin
   const start = Date.now();
   try {
     // Get combo details
-    const combos = (await apiFetch("/api/combos")) as any[];
+    const combos = normalizeCombosResponse(await apiFetch("/api/combos"));
     const combo = combos.find((c: any) => c.id === args.comboId || c.name === args.comboId);
     if (!combo) {
       return {
@@ -340,13 +352,14 @@ export async function handleGetProviderMetrics(args: { provider: string }) {
     ]);
 
     const health = healthRaw.status === "fulfilled" ? (healthRaw.value as any) : {};
-    const quota = quotaRaw.status === "fulfilled" ? (quotaRaw.value as any) : {};
+    const quota =
+      quotaRaw.status === "fulfilled"
+        ? normalizeQuotaResponse(quotaRaw.value, { provider: args.provider })
+        : normalizeQuotaResponse({});
     const analytics = analyticsRaw.status === "fulfilled" ? (analyticsRaw.value as any) : {};
 
     const cb = (health.circuitBreakers || []).find((b: any) => b.provider === args.provider);
-    const providerQuota = Array.isArray(quota?.providers)
-      ? quota.providers.find((p: any) => p.provider === args.provider)
-      : null;
+    const providerQuota = quota.providers.find((p) => p.provider === args.provider) || null;
 
     const result = {
       provider: args.provider,
@@ -385,7 +398,7 @@ export async function handleBestComboForTask(args: {
   const start = Date.now();
   try {
     const fitness = TASK_FITNESS[args.taskType] || TASK_FITNESS.coding;
-    const combos = (await apiFetch("/api/combos")) as any[];
+    const combos = normalizeCombosResponse(await apiFetch("/api/combos"));
     const enabledCombos = combos.filter((c: any) => c.enabled !== false);
 
     if (enabledCombos.length === 0) {

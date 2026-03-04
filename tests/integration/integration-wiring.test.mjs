@@ -111,6 +111,7 @@ describe("API Routes — existence check", () => {
     "src/app/api/models/availability/route.ts",
     "src/app/api/telemetry/summary/route.ts",
     "src/app/api/usage/budget/route.ts",
+    "src/app/api/usage/quota/route.ts",
     "src/app/api/fallback/chains/route.ts",
     "src/app/api/compliance/audit-log/route.ts",
     "src/app/api/evals/route.ts",
@@ -140,6 +141,10 @@ describe("API Routes — export HTTP methods", () => {
 
   it("/api/usage/budget should export GET and POST", () => {
     assertRouteMethods("src/app/api/usage/budget/route.ts", ["GET", "POST"]);
+  });
+
+  it("/api/usage/quota should export GET", () => {
+    assertRouteMethods("src/app/api/usage/quota/route.ts", ["GET"]);
   });
 
   it("/api/fallback/chains should export GET, POST, DELETE", () => {

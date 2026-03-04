@@ -225,6 +225,16 @@ export const checkQuotaOutput = z.object({
       tokenStatus: z.enum(["valid", "expiring", "expired", "refreshing"]),
     })
   ),
+  meta: z
+    .object({
+      generatedAt: z.string(),
+      filters: z.object({
+        provider: z.string().nullable(),
+        connectionId: z.string().nullable(),
+      }),
+      totalProviders: z.number(),
+    })
+    .optional(),
 });
 
 export const checkQuotaTool: McpToolDefinition<typeof checkQuotaInput, typeof checkQuotaOutput> = {
@@ -236,7 +246,7 @@ export const checkQuotaTool: McpToolDefinition<typeof checkQuotaInput, typeof ch
   scopes: ["read:quota"],
   auditLevel: "basic",
   phase: 1,
-  sourceEndpoints: ["/api/usage/[connectionId]", "/api/token-health"],
+  sourceEndpoints: ["/api/usage/quota", "/api/token-health", "/api/rate-limits"],
 };
 
 // --- Tool 6: omniroute_route_request ---

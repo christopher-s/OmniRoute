@@ -87,6 +87,7 @@ export class GeminiCliProxyExecutor extends BaseExecutor {
       systemPromptPath,
       signal,
       timeoutMs,
+      cliPath: String(psd.cliPath || "gemini"),
     });
 
     if (!result.ok) {

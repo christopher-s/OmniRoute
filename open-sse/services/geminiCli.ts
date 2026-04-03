@@ -1,6 +1,5 @@
 import { spawn } from "child_process";
 import crypto from "crypto";
-import fs from "fs";
 import os from "os";
 import path from "path";
 
@@ -285,8 +284,9 @@ export function buildGeminiCompletionPayload({
 export function parseGeminiCliFailure(stderrText: string, stdoutText = ""): GeminiCliFailure {
   const stderr = String(stderrText || "").trim();
   const stdout = String(stdoutText || "").trim();
-  const combined = `${stderr}\n${stdout}`.trim() || "Gemini CLI request failed";
-  const normalized = combined.toLowerCase();
+  const rawCombined = `${stderr}\n${stdout}`.trim() || "Gemini CLI request failed";
+  const combined = sanitizeErrorOutput(rawCombined);
+  const normalized = rawCombined.toLowerCase();
 
   // Auth / ToS errors
   if (
@@ -353,22 +353,24 @@ export function createGeminiCliErrorResponse(failure: GeminiCliFailure): Respons
 }
 
 // ---------------------------------------------------------------------------
-// Process spawner
+// Error sanitization
 // ---------------------------------------------------------------------------
 
-function createTempFile(): string {
-  const dir = os.tmpdir();
-  const name = `omniroute-gemini-${crypto.randomUUID()}.json`;
-  return path.join(dir, name);
+/**
+ * Strip internal paths, account emails, and temp file names from CLI error
+ * output before returning to API clients.
+ */
+function sanitizeErrorOutput(text: string): string {
+  return text
+    .replace(/\/home\/[^/\s]+\/\.gemini-cli[^/\s]*/gi, "~/.gemini-cli/...")
+    .replace(/\/home\/[^/\s]+\/\.gemini-sessions\/[^/\s]+/gi, "~/gemini-sessions/[account]")
+    .replace(/\/tmp\/omniroute-gemini-[a-f0-9-]+/gi, "/tmp/omniroute-gemini-[id]")
+    .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "[email]");
 }
 
-function cleanupTempFile(filePath: string) {
-  try {
-    fs.unlinkSync(filePath);
-  } catch {
-    // Already cleaned up or never created
-  }
-}
+// ---------------------------------------------------------------------------
+// Process spawner
+// ---------------------------------------------------------------------------
 
 export async function runGeminiCliCommand({
   prompt,
@@ -377,10 +379,9 @@ export async function runGeminiCliCommand({
   systemPromptPath,
   signal,
   timeoutMs = DEFAULT_TIMEOUT_MS,
-}: GeminiCliRunOptions): Promise<GeminiCliRunResult> {
-  const tempFile = createTempFile();
-
-  const cliPath = "gemini"; // Could be made configurable via providerSpecificData
+  cliPath = "gemini",
+}: GeminiCliRunOptions & { cliPath?: string }): Promise<GeminiCliRunResult> {
+  const resolvedCliPath = cliPath;
   const args = ["--model", model || GEMINI_DEFAULT_MODEL, "-o", "json", "--yolo", "--sandbox=false"];
 
   const env: Record<string, string> = {
@@ -409,7 +410,7 @@ export async function runGeminiCliCommand({
     let timedOut = false;
     let settled = false;
 
-    const child = spawn(cliPath, args, {
+    const child = spawn(resolvedCliPath, args, {
       env,
       stdio: ["pipe", "pipe", "pipe"],
       ...(process.platform === "win32" ? { shell: true } : {}),
@@ -420,7 +421,6 @@ export async function runGeminiCliCommand({
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener?.("abort", abortHandler);
-      cleanupTempFile(tempFile);
       resolve(result);
     };
 

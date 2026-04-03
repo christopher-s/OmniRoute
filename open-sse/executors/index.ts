@@ -1,5 +1,6 @@
 import { AntigravityExecutor } from "./antigravity.ts";
 import { GeminiCLIExecutor } from "./gemini-cli.ts";
+import { GeminiCliProxyExecutor } from "./gemini-cli-proxy.ts";
 import { GithubExecutor } from "./github.ts";
 import { QoderExecutor } from "./qoder.ts";
 import { KiroExecutor } from "./kiro.ts";
@@ -16,6 +17,7 @@ import { CliproxyapiExecutor } from "./cliproxyapi.ts";
 const executors = {
   antigravity: new AntigravityExecutor(),
   "gemini-cli": new GeminiCLIExecutor(),
+  "gemini-cli-proxy": new GeminiCliProxyExecutor(),
   github: new GithubExecutor(),
   qoder: new QoderExecutor(),
   kiro: new KiroExecutor(),
@@ -50,6 +52,7 @@ export function hasSpecializedExecutor(provider) {
 export { BaseExecutor } from "./base.ts";
 export { AntigravityExecutor } from "./antigravity.ts";
 export { GeminiCLIExecutor } from "./gemini-cli.ts";
+export { GeminiCliProxyExecutor } from "./gemini-cli-proxy.ts";
 export { GithubExecutor } from "./github.ts";
 export { QoderExecutor } from "./qoder.ts";
 export { KiroExecutor } from "./kiro.ts";

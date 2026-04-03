@@ -15,6 +15,13 @@ export const FREE_PROVIDERS = {
       "Google restricts third-party OAuth usage for Gemini CLI (Mar 2026). Pro models require paid plans. Use 'gemini' (API key) provider instead.",
   },
   kiro: { id: "kiro", alias: "kr", name: "Kiro AI", icon: "psychology_alt", color: "#FF6B35" },
+  "gemini-cli-proxy": {
+    id: "gemini-cli-proxy",
+    alias: "gcp",
+    name: "Gemini CLI Proxy",
+    icon: "terminal",
+    color: "#4285F4",
+  },
 };
 
 export const FREE_APIKEY_PROVIDER_IDS = new Set(["qoder"]);

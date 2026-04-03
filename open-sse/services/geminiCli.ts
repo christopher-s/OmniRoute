@@ -5,6 +5,7 @@ import path from "path";
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash";
+const MAX_OUTPUT_SIZE = 10 * 1024 * 1024; // 10 MB
 
 type JsonRecord = Record<string, unknown>;
 
@@ -50,15 +51,16 @@ function getString(value: unknown): string {
 }
 
 export function normalizeGeminiCliProxyProviderData(
-  providerSpecificData: JsonRecord = {}
+  providerSpecificData: JsonRecord | null | undefined = {}
 ): JsonRecord {
+  const data = providerSpecificData || {};
   return {
-    ...providerSpecificData,
-    homeDir: getString(providerSpecificData.homeDir),
-    cliPath: getString(providerSpecificData.cliPath) || "gemini",
-    systemPromptPath: getString(providerSpecificData.systemPromptPath),
-    timeoutMs: Number(providerSpecificData.timeoutMs) || DEFAULT_TIMEOUT_MS,
-    email: getString(providerSpecificData.email),
+    ...data,
+    homeDir: getString(data.homeDir),
+    cliPath: getString(data.cliPath) || "gemini",
+    systemPromptPath: getString(data.systemPromptPath),
+    timeoutMs: Number(data.timeoutMs) || DEFAULT_TIMEOUT_MS,
+    email: getString(data.email),
   };
 }
 
@@ -113,13 +115,13 @@ export function buildGeminiPrompt(body: unknown): string {
 
   if (messages.length === 0) return "";
 
-  // Single user message with no history — send raw
+  // Single user message with no history — send raw (still sanitize delimiters)
   if (
     messages.length === 1 &&
     asRecord(messages[0]).role === "user" &&
     !asRecord(messages[0]).tool_calls
   ) {
-    return flattenMessageContent(asRecord(messages[0]).content);
+    return sanitizeDelimiters(flattenMessageContent(asRecord(messages[0]).content));
   }
 
   const lines: string[] = [];
@@ -199,8 +201,8 @@ export function extractTextFromGeminiOutput(raw: string): string {
     // Not valid JSON — try strategy 2
   }
 
-  // Strategy 2: Extract JSON from mixed output
-  const jsonMatch = trimmed.match(/\{[\s\S]*"response"\s*:\s*"([^"]*?)"/);
+  // Strategy 2: Extract JSON from mixed output (non-greedy to avoid spanning objects)
+  const jsonMatch = trimmed.match(/\{[^{}]*"response"\s*:\s*"([^"]*?)"/);
   if (jsonMatch && jsonMatch[1]) return jsonMatch[1];
 
   // Strategy 3: Raw text fallback
@@ -226,7 +228,9 @@ export function extractUsageFromGeminiOutput(raw: string): {
     let promptTokens = 0;
     let completionTokens = 0;
 
-    for (const modelEntry of Object.values(models)) {
+    for (const [name, modelEntry] of Object.entries(models)) {
+      // Skip internal routing overhead — only count main model tokens
+      if (name === "utility_router") continue;
       const model = asRecord(modelEntry);
       const tokens = asRecord(model.tokens);
       promptTokens += Number(tokens.input) || 0;
@@ -286,7 +290,7 @@ export function parseGeminiCliFailure(stderrText: string, stdoutText = ""): Gemi
   const stdout = String(stdoutText || "").trim();
   const rawCombined = `${stderr}\n${stdout}`.trim() || "Gemini CLI request failed";
   const combined = sanitizeErrorOutput(rawCombined);
-  const normalized = rawCombined.toLowerCase();
+  const normalized = combined.toLowerCase();
 
   // Auth / ToS errors
   if (
@@ -436,7 +440,7 @@ export async function runGeminiCliCommand({
         } catch {
           // Already dead
         }
-      }, 3000).unref?.();
+      }, 3000);
     };
 
     const abortHandler = () => {
@@ -476,10 +480,16 @@ export async function runGeminiCliCommand({
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
+      if (stdout.length > MAX_OUTPUT_SIZE) {
+        try { child.kill("SIGTERM"); } catch { /* already dead */ }
+      }
     });
 
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
+      if (stderr.length > MAX_OUTPUT_SIZE) {
+        try { child.kill("SIGTERM"); } catch { /* already dead */ }
+      }
     });
 
     child.on("error", (error: Error) => {

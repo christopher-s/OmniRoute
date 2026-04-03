@@ -243,7 +243,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
 
   "gemini-cli-proxy": {
     id: "gemini-cli-proxy",
-    alias: "gcp",
+    alias: undefined,
     format: "openai",
     executor: "gemini-cli-proxy",
     baseUrl: "gemini-cli-proxy://local",
@@ -253,7 +253,9 @@ export const REGISTRY: Record<string, RegistryEntry> = {
     models: [
       { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
       { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+      { id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash Lite" },
     ],
+    passthroughModels: true,
   },
 
   codex: {

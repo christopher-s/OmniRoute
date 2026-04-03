@@ -1,11 +1,15 @@
 import { spawn } from "child_process";
 import crypto from "crypto";
+import fs from "fs";
+import https from "https";
 import os from "os";
 import path from "path";
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash";
 const MAX_OUTPUT_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_CONCURRENT_PROCESSES = 5;
+const MODELS_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 type JsonRecord = Record<string, unknown>;
 
@@ -13,6 +17,85 @@ export const GEMINI_CLI_STATIC_MODELS = [
   { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
   { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
 ];
+
+// ---------------------------------------------------------------------------
+// Dynamic model listing
+// ---------------------------------------------------------------------------
+
+let cachedModels: { id: string; name: string }[] | null = null;
+let modelsCacheExpiry = 0;
+
+/**
+ * Fetch available Gemini models from the Google AI API.
+ * Returns the static fallback list if no API key is provided or fetch fails.
+ */
+export async function fetchGeminiModels(
+  apiKey?: string | null
+): Promise<{ id: string; name: string }[]> {
+  // Return cached if fresh
+  if (cachedModels && Date.now() < modelsCacheExpiry) {
+    return cachedModels;
+  }
+
+  // No API key — return static list
+  if (!apiKey) {
+    return GEMINI_CLI_STATIC_MODELS;
+  }
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+    const response = await new Promise<string>((resolve, reject) => {
+      const req = https.get(url, { timeout: 10_000 }, (res) => {
+        let body = "";
+        res.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+        res.on("end", () => resolve(body));
+        res.on("error", reject);
+      });
+      req.on("error", reject);
+      req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+    });
+
+    const parsed = JSON.parse(response);
+    const remoteModels = Array.isArray(parsed.models) ? parsed.models : [];
+
+    // Filter to models that support generateContent and have gemini in the name
+    const models = remoteModels
+      .filter((m: JsonRecord) => {
+        const name = getString(m.name);
+        const methods = Array.isArray(m.supportedGenerationMethods)
+          ? m.supportedGenerationMethods as string[]
+          : [];
+        return name.includes("gemini") && methods.includes("generateContent");
+      })
+      .map((m: JsonRecord) => {
+        // Model names come as "models/gemini-2.5-flash" — strip prefix
+        const id = getString(m.name).replace(/^models\//, "");
+        const displayName = getString(m.displayName);
+        return { id, name: displayName || id };
+      });
+
+    if (models.length > 0) {
+      cachedModels = models;
+      modelsCacheExpiry = Date.now() + MODELS_CACHE_TTL_MS;
+      return models;
+    }
+  } catch {
+    // Fetch failed — fall through to static list
+  }
+
+  return GEMINI_CLI_STATIC_MODELS;
+}
+
+/**
+ * Synchronous access to cached models (for registry initialization).
+ * Returns static list if cache is empty.
+ */
+export function getGeminiModels(): { id: string; name: string }[] {
+  if (cachedModels && Date.now() < modelsCacheExpiry) {
+    return cachedModels;
+  }
+  return GEMINI_CLI_STATIC_MODELS;
+}
 
 type GeminiCliRunOptions = {
   prompt: string;
@@ -37,6 +120,81 @@ type GeminiCliFailure = {
   message: string;
   code: string;
 };
+
+// ---------------------------------------------------------------------------
+// Concurrency control
+// ---------------------------------------------------------------------------
+
+let runningCount = 0;
+const pendingQueue: Array<() => void> = [];
+
+function acquireSlot(): Promise<void> {
+  if (runningCount < MAX_CONCURRENT_PROCESSES) {
+    runningCount++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    pendingQueue.push(resolve);
+  });
+}
+
+function releaseSlot() {
+  if (pendingQueue.length > 0) {
+    const next = pendingQueue.shift()!;
+    next();
+  } else {
+    runningCount--;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Path validation
+// ---------------------------------------------------------------------------
+
+const BLOCKED_HOME_PATHS = new Set(["/", "/etc", "/root", "/var", "/usr", "/sbin", "/bin", "/boot", "/dev", "/proc", "/sys"]);
+
+export function validateHomeDir(homeDir: string): string | null {
+  if (!homeDir) return "homeDir is required";
+  const resolved = path.resolve(homeDir);
+  if (BLOCKED_HOME_PATHS.has(resolved)) {
+    return `homeDir cannot be a system directory (${resolved})`;
+  }
+  try {
+    const stat = fs.statSync(resolved);
+    if (!stat.isDirectory()) return `homeDir is not a directory (${resolved})`;
+  } catch {
+    return `homeDir directory does not exist (${resolved})`;
+  }
+  return null;
+}
+
+export function validateCliPath(cliPath: string): string | null {
+  if (!cliPath) return null; // will use default "gemini" from PATH
+  if (!path.isAbsolute(cliPath)) {
+    return `cliPath must be an absolute path (got: ${cliPath})`;
+  }
+  // Block path traversal in the raw input (before resolve normalizes it away)
+  if (cliPath.includes("..")) {
+    return `cliPath must not contain path traversal (got: ${cliPath})`;
+  }
+  const resolved = path.resolve(cliPath);
+  try {
+    fs.accessSync(resolved, fs.constants.X_OK);
+  } catch {
+    return `cliPath is not executable (${resolved})`;
+  }
+  return null;
+}
+
+export function validateSystemPromptPath(systemPromptPath: string): string | null {
+  if (!systemPromptPath) return "systemPromptPath is required";
+  try {
+    fs.accessSync(systemPromptPath, fs.constants.R_OK);
+  } catch {
+    return `systemPromptPath does not exist or is not readable (${systemPromptPath})`;
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Provider-specific data normalization
@@ -201,9 +359,34 @@ export function extractTextFromGeminiOutput(raw: string): string {
     // Not valid JSON — try strategy 2
   }
 
-  // Strategy 2: Extract JSON from mixed output (non-greedy to avoid spanning objects)
-  const jsonMatch = trimmed.match(/\{[^{}]*"response"\s*:\s*"([^"]*?)"/);
-  if (jsonMatch && jsonMatch[1]) return jsonMatch[1];
+  // Strategy 2: Extract JSON object from mixed output by finding balanced braces
+  const jsonStart = trimmed.indexOf("{");
+  if (jsonStart !== -1) {
+    let depth = 0;
+    let jsonEnd = -1;
+    for (let i = jsonStart; i < trimmed.length; i++) {
+      if (trimmed[i] === "{") depth++;
+      else if (trimmed[i] === "}") depth--;
+      if (depth === 0) {
+        jsonEnd = i + 1;
+        break;
+      }
+    }
+    if (jsonEnd > jsonStart) {
+      try {
+        const candidate = JSON.parse(trimmed.slice(jsonStart, jsonEnd));
+        if (typeof candidate === "object" && candidate !== null) {
+          const record = candidate as JsonRecord;
+          for (const key of ["response", "result", "text", "content"]) {
+            const val = record[key];
+            if (typeof val === "string" && val.trim()) return val.trim();
+          }
+        }
+      } catch {
+        // Couldn't parse — fall through to strategy 3
+      }
+    }
+  }
 
   // Strategy 3: Raw text fallback
   return trimmed;
@@ -385,6 +568,8 @@ export async function runGeminiCliCommand({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   cliPath = "gemini",
 }: GeminiCliRunOptions & { cliPath?: string }): Promise<GeminiCliRunResult> {
+  await acquireSlot();
+
   const resolvedCliPath = cliPath;
   const args = ["--model", model || GEMINI_DEFAULT_MODEL, "-o", "json", "--yolo", "--sandbox=false"];
 
@@ -412,6 +597,7 @@ export async function runGeminiCliCommand({
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let outputOverflowed = false;
     let settled = false;
 
     const child = spawn(resolvedCliPath, args, {
@@ -425,6 +611,7 @@ export async function runGeminiCliCommand({
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener?.("abort", abortHandler);
+      releaseSlot();
       resolve(result);
     };
 
@@ -455,8 +642,17 @@ export async function runGeminiCliCommand({
       });
     };
 
+    // Check synchronously before registering listener to avoid race
     if (signal?.aborted) {
-      abortHandler();
+      abortChild();
+      resolve({
+        ok: false,
+        code: null,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        error: "aborted",
+      });
       return;
     }
 
@@ -479,17 +675,21 @@ export async function runGeminiCliCommand({
     }
 
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-      if (stdout.length > MAX_OUTPUT_SIZE) {
+      if (stdout.length + chunk.length > MAX_OUTPUT_SIZE) {
+        outputOverflowed = true;
         try { child.kill("SIGTERM"); } catch { /* already dead */ }
+        return;
       }
+      stdout += chunk.toString();
     });
 
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-      if (stderr.length > MAX_OUTPUT_SIZE) {
+      if (stderr.length + chunk.length > MAX_OUTPUT_SIZE) {
+        outputOverflowed = true;
         try { child.kill("SIGTERM"); } catch { /* already dead */ }
+        return;
       }
+      stderr += chunk.toString();
     });
 
     child.on("error", (error: Error) => {
@@ -505,12 +705,12 @@ export async function runGeminiCliCommand({
 
     child.on("close", (code) => {
       cleanup({
-        ok: !timedOut && code === 0,
+        ok: !timedOut && !outputOverflowed && code === 0,
         code,
         stdout: stdout.trim(),
         stderr: stderr.trim(),
         timedOut,
-        error: timedOut ? "timeout" : null,
+        error: timedOut ? "timeout" : outputOverflowed ? "output_overflow" : null,
       });
     });
   });

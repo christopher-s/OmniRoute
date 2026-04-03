@@ -13,6 +13,9 @@ import {
   normalizeGeminiCliProxyProviderData,
   parseGeminiCliFailure,
   runGeminiCliCommand,
+  validateHomeDir,
+  validateCliPath,
+  validateSystemPromptPath,
 } from "../services/geminiCli.ts";
 
 export class GeminiCliProxyExecutor extends BaseExecutor {
@@ -48,12 +51,14 @@ export class GeminiCliProxyExecutor extends BaseExecutor {
     );
 
     const homeDir = String(psd.homeDir || "").trim();
-    if (!homeDir) {
+
+    // Validate homeDir
+    const homeDirError = validateHomeDir(homeDir);
+    if (homeDirError) {
       return {
         response: createGeminiCliErrorResponse({
           status: 400,
-          message:
-            "gemini-cli-proxy requires homeDir in provider configuration. Set the homeDir field in provider-specific data.",
+          message: `gemini-cli-proxy config error: ${homeDirError}`,
           code: "config_error",
         }),
         url: "gemini-cli-proxy://local",
@@ -62,13 +67,30 @@ export class GeminiCliProxyExecutor extends BaseExecutor {
       };
     }
 
+    // Validate systemPromptPath
     const systemPromptPath = String(psd.systemPromptPath || "").trim();
-    if (!systemPromptPath) {
+    const promptPathError = validateSystemPromptPath(systemPromptPath);
+    if (promptPathError) {
       return {
         response: createGeminiCliErrorResponse({
           status: 400,
-          message:
-            "gemini-cli-proxy requires systemPromptPath in provider configuration. Create an empty .md file and set the path.",
+          message: `gemini-cli-proxy config error: ${promptPathError}`,
+          code: "config_error",
+        }),
+        url: "gemini-cli-proxy://local",
+        headers,
+        transformedBody: body,
+      };
+    }
+
+    // Validate cliPath if provided
+    const cliPath = String(psd.cliPath || "gemini");
+    const cliPathError = validateCliPath(cliPath);
+    if (cliPathError) {
+      return {
+        response: createGeminiCliErrorResponse({
+          status: 400,
+          message: `gemini-cli-proxy config error: ${cliPathError}`,
           code: "config_error",
         }),
         url: "gemini-cli-proxy://local",
@@ -87,10 +109,22 @@ export class GeminiCliProxyExecutor extends BaseExecutor {
       systemPromptPath,
       signal,
       timeoutMs,
-      cliPath: String(psd.cliPath || "gemini"),
+      cliPath,
     });
 
     if (!result.ok) {
+      if (result.error === "output_overflow") {
+        return {
+          response: createGeminiCliErrorResponse({
+            status: 502,
+            message: "Gemini CLI output exceeded maximum size (10 MB). Response was too large.",
+            code: "output_overflow",
+          }),
+          url: "gemini-cli-proxy://local",
+          headers,
+          transformedBody: body,
+        };
+      }
       const failure = parseGeminiCliFailure(result.stderr || result.error || "", result.stdout);
       return {
         response: createGeminiCliErrorResponse(failure),

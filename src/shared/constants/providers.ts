@@ -17,7 +17,7 @@ export const FREE_PROVIDERS = {
   kiro: { id: "kiro", alias: "kr", name: "Kiro AI", icon: "psychology_alt", color: "#FF6B35" },
   "gemini-cli-proxy": {
     id: "gemini-cli-proxy",
-    alias: "gcp",
+    alias: undefined,
     name: "Gemini CLI Proxy",
     icon: "terminal",
     color: "#4285F4",

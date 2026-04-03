@@ -13,6 +13,12 @@ import {
   createGeminiCliErrorResponse,
   normalizeGeminiCliProxyProviderData,
   runGeminiCliCommand,
+  validateHomeDir,
+  validateCliPath,
+  validateSystemPromptPath,
+  fetchGeminiModels,
+  getGeminiModels,
+  GEMINI_CLI_STATIC_MODELS,
 } from "../../open-sse/services/geminiCli.ts";
 
 // ---------------------------------------------------------------------------
@@ -631,4 +637,141 @@ test("extractUsageFromGeminiOutput - handles empty models object", () => {
   assert.equal(usage.prompt_tokens, 0);
   assert.equal(usage.completion_tokens, 0);
   assert.equal(usage.total_tokens, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Path validation (C-001, C-002, I-009)
+// ---------------------------------------------------------------------------
+
+test("validateHomeDir - rejects empty string", () => {
+  const err = validateHomeDir("");
+  assert.ok(err);
+  assert.ok(err.includes("required"));
+});
+
+test("validateHomeDir - rejects system directories", () => {
+  assert.ok(validateHomeDir("/"));
+  assert.ok(validateHomeDir("/etc"));
+  assert.ok(validateHomeDir("/root"));
+  assert.ok(validateHomeDir("/var"));
+  assert.ok(validateHomeDir("/usr"));
+});
+
+test("validateHomeDir - rejects non-directory paths", () => {
+  const tmpFile = path.join(os.tmpdir(), "omniroute-test-notdir-" + Date.now());
+  fs.writeFileSync(tmpFile, "test", "utf8");
+  try {
+    const err = validateHomeDir(tmpFile);
+    assert.ok(err);
+    assert.ok(err.includes("not a directory"));
+  } finally {
+    fs.unlinkSync(tmpFile);
+  }
+});
+
+test("validateHomeDir - rejects nonexistent paths", () => {
+  const err = validateHomeDir("/tmp/omniroute-nonexistent-" + Date.now());
+  assert.ok(err);
+  assert.ok(err.includes("does not exist"));
+});
+
+test("validateHomeDir - accepts valid directory", () => {
+  const err = validateHomeDir(os.tmpdir());
+  assert.equal(err, null);
+});
+
+test("validateCliPath - accepts empty string (default)", () => {
+  assert.equal(validateCliPath(""), null);
+});
+
+test("validateCliPath - rejects relative paths", () => {
+  const err = validateCliPath("gemini");
+  assert.ok(err);
+  assert.ok(err.includes("absolute"));
+});
+
+test("validateCliPath - rejects path traversal", () => {
+  const err = validateCliPath("/usr/bin/../etc/passwd");
+  assert.ok(err);
+  assert.ok(err.includes("path traversal"));
+});
+
+test("validateCliPath - rejects non-executable", () => {
+  const err = validateCliPath("/etc/hosts");
+  assert.ok(err);
+  assert.ok(err.includes("not executable"));
+});
+
+test("validateCliPath - accepts valid executable", () => {
+  // /bin/sh should exist and be executable on all Unix systems
+  if (process.platform === "win32") return;
+  assert.equal(validateCliPath("/bin/sh"), null);
+});
+
+test("validateSystemPromptPath - rejects empty", () => {
+  const err = validateSystemPromptPath("");
+  assert.ok(err);
+  assert.ok(err.includes("required"));
+});
+
+test("validateSystemPromptPath - rejects nonexistent", () => {
+  const err = validateSystemPromptPath("/tmp/nonexistent-file-" + Date.now());
+  assert.ok(err);
+  assert.ok(err.includes("does not exist"));
+});
+
+test("validateSystemPromptPath - accepts existing readable file", () => {
+  const tmpFile = path.join(os.tmpdir(), "omniroute-test-prompt-" + Date.now());
+  fs.writeFileSync(tmpFile, "", "utf8");
+  try {
+    assert.equal(validateSystemPromptPath(tmpFile), null);
+  } finally {
+    fs.unlinkSync(tmpFile);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Balanced-brace JSON extraction (I-007)
+// ---------------------------------------------------------------------------
+
+test("extractTextFromGeminiOutput - balanced braces handles nested JSON in response", () => {
+  const json = JSON.stringify({
+    session_id: "test",
+    response: 'Here is code: {"key": "value"} and more text',
+    stats: {},
+  });
+  // Wrap in preamble to trigger strategy 2
+  const mixed = `preamble\n${json}\ntrailing`;
+  const result = extractTextFromGeminiOutput(mixed);
+  assert.ok(result.includes("Here is code"));
+  assert.ok(result.includes('"key": "value"'));
+});
+
+test("extractTextFromGeminiOutput - strategy 2 does not span separate objects", () => {
+  const first = JSON.stringify({ other: "x", response: "first" });
+  const second = JSON.stringify({ response: "second" });
+  const mixed = `preamble\n${first}\n${second}\ntrailing`;
+  assert.equal(extractTextFromGeminiOutput(mixed), "first");
+});
+
+// ---------------------------------------------------------------------------
+// Dynamic model listing
+// ---------------------------------------------------------------------------
+
+test("fetchGeminiModels - returns static list without API key", async () => {
+  const models = await fetchGeminiModels(null);
+  assert.ok(models.length >= 2);
+  assert.ok(models.some((m) => m.id === "gemini-2.5-pro"));
+  assert.ok(models.some((m) => m.id === "gemini-2.5-flash"));
+});
+
+test("fetchGeminiModels - returns static list for invalid API key", async () => {
+  const models = await fetchGeminiModels("invalid-key-12345");
+  // Should fall back to static list (API call will fail)
+  assert.ok(models.length >= 2);
+});
+
+test("getGeminiModels - returns static models when cache empty", () => {
+  const models = getGeminiModels();
+  assert.deepEqual(models, GEMINI_CLI_STATIC_MODELS);
 });

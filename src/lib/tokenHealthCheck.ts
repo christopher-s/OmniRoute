@@ -16,6 +16,7 @@ import {
   supportsTokenRefresh,
   isUnrecoverableRefreshError,
 } from "@omniroute/open-sse/services/tokenRefresh.ts";
+import { delegatesTokenManagement } from "@/shared/constants/providers";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const TICK_MS = 60 * 1000; // sweep interval: every 60 seconds
@@ -186,6 +187,14 @@ async function checkConnection(conn) {
     log(
       `${LOG_PREFIX} Retrying expired ${conn.provider}/${conn.name || conn.email || conn.id} (attempt ${retryCount + 1}/${EXPIRED_RETRY_MAX})`
     );
+  }
+
+  // Skip providers that delegate token management to an external process
+  if (delegatesTokenManagement(conn.provider)) {
+    log(
+      `${LOG_PREFIX} Skipping ${conn.provider}/${conn.name || conn.email || conn.id} (tokens delegated to CLI)`
+    );
+    return;
   }
 
   if (!supportsTokenRefresh(conn.provider)) {

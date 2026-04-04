@@ -39,12 +39,14 @@ export const CODEX_CONFIG = {
   },
 };
 
-// Gemini (Google) OAuth Configuration (Standard OAuth2)
+// Gemini (Google) OAuth Configuration (Authorization Code Flow with PKCE)
 export const GEMINI_CONFIG = {
   clientId:
     process.env.GEMINI_OAUTH_CLIENT_ID ||
     "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
-  clientSecret: process.env.GEMINI_OAUTH_CLIENT_SECRET || "",
+  clientSecret:
+    process.env.GEMINI_OAUTH_CLIENT_SECRET ||
+    "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",
   authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
   tokenUrl: "https://oauth2.googleapis.com/token",
   userInfoUrl: "https://www.googleapis.com/oauth2/v1/userinfo",
@@ -53,6 +55,7 @@ export const GEMINI_CONFIG = {
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
   ],
+  codeChallengeMethod: "S256",
 };
 
 // Qwen OAuth Configuration (Device Code Flow with PKCE)
@@ -232,6 +235,7 @@ export const PROVIDERS = {
   CLAUDE: "claude",
   CODEX: "codex",
   GEMINI: "gemini-cli",
+  GEMINI_CLI_PROXY: "gemini-cli-proxy",
   QWEN: "qwen",
   QODER: "qoder",
   ANTIGRAVITY: "antigravity",

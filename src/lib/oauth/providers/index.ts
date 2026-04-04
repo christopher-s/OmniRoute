@@ -27,6 +27,7 @@ export const PROVIDERS = {
   claude,
   codex,
   "gemini-cli": gemini,
+  "gemini-cli-proxy": gemini,
   antigravity,
   qoder,
   qwen,

@@ -523,41 +523,66 @@ test("createGeminiCliErrorResponse - auth error uses correct type", async () => 
 // Provider data normalization
 // ---------------------------------------------------------------------------
 
-test("normalizeGeminiCliProxyProviderData - sets defaults", () => {
-  const result = normalizeGeminiCliProxyProviderData({});
-  assert.equal(result.cliPath, "gemini");
+test("normalizeGeminiCliProxyProviderData - sets defaults with connectionId", () => {
+  const result = normalizeGeminiCliProxyProviderData({}, "test-conn-001");
   assert.equal(result.timeoutMs, 300_000);
-  assert.equal(result.homeDir, "");
-  assert.equal(result.systemPromptPath, "");
+  assert.ok(result.homeDir.includes("omniroute-gemini-cli-sessions"));
+  assert.ok(result.homeDir.includes("test-conn-001"));
+  assert.ok(result.systemPromptPath.endsWith("empty-system-prompt.md"));
   assert.equal(result.email, "");
+  // Cleanup
+  fs.rmSync(path.join(process.cwd(), ".data", "omniroute-gemini-cli-sessions"), {
+    recursive: true,
+    force: true,
+  });
 });
 
 test("normalizeGeminiCliProxyProviderData - preserves provided values", () => {
-  const result = normalizeGeminiCliProxyProviderData({
-    homeDir: "/home/test/acct-001",
-    cliPath: "/usr/local/bin/gemini",
-    systemPromptPath: "/tmp/empty.md",
-    timeoutMs: 60000,
-    email: "test@gmail.com",
-  });
-  assert.equal(result.homeDir, "/home/test/acct-001");
-  assert.equal(result.cliPath, "/usr/local/bin/gemini");
-  assert.equal(result.systemPromptPath, "/tmp/empty.md");
-  assert.equal(result.timeoutMs, 60000);
-  assert.equal(result.email, "test@gmail.com");
+  const dir = createTempDir();
+  const promptFile = path.join(dir, "prompt.md");
+  fs.writeFileSync(promptFile, "", "utf8");
+  try {
+    const result = normalizeGeminiCliProxyProviderData({
+      homeDir: dir,
+      cliPath: "/usr/local/bin/gemini",
+      systemPromptPath: promptFile,
+      timeoutMs: 60000,
+      email: "test@gmail.com",
+    });
+    assert.equal(result.homeDir, dir);
+    assert.equal(result.cliPath, "/usr/local/bin/gemini");
+    assert.equal(result.systemPromptPath, promptFile);
+    assert.equal(result.timeoutMs, 60000);
+    assert.equal(result.email, "test@gmail.com");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
-test("normalizeGeminiCliProxyProviderData - handles null", () => {
-  const result = normalizeGeminiCliProxyProviderData(null);
-  assert.equal(result.homeDir, "");
-  assert.equal(result.cliPath, "gemini");
+test("normalizeGeminiCliProxyProviderData - handles null with connectionId", () => {
+  const result = normalizeGeminiCliProxyProviderData(null, "null-test-conn");
+  assert.ok(result.homeDir.includes("omniroute-gemini-cli-sessions"));
   assert.equal(result.timeoutMs, 300_000);
+  fs.rmSync(path.join(process.cwd(), ".data", "omniroute-gemini-cli-sessions"), {
+    recursive: true,
+    force: true,
+  });
 });
 
-test("normalizeGeminiCliProxyProviderData - handles undefined", () => {
-  const result = normalizeGeminiCliProxyProviderData(undefined);
-  assert.equal(result.homeDir, "");
-  assert.equal(result.cliPath, "gemini");
+test("normalizeGeminiCliProxyProviderData - handles undefined with connectionId", () => {
+  const result = normalizeGeminiCliProxyProviderData(undefined, "undef-test-conn");
+  assert.ok(result.homeDir.includes("omniroute-gemini-cli-sessions"));
+  fs.rmSync(path.join(process.cwd(), ".data", "omniroute-gemini-cli-sessions"), {
+    recursive: true,
+    force: true,
+  });
+});
+
+test("normalizeGeminiCliProxyProviderData - throws without connectionId", () => {
+  assert.throws(
+    () => normalizeGeminiCliProxyProviderData({}),
+    /connectionId/
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -788,12 +813,13 @@ test("runGeminiCliCommand - concurrent requests are processed (semaphore allows)
 // End-to-end: Executor with mock CLI
 // ---------------------------------------------------------------------------
 
-test("executor returns error response when homeDir missing", async () => {
+test("executor returns error when connectionId missing", async () => {
   const { GeminiCliProxyExecutor } = await import(
     "../../open-sse/executors/gemini-cli-proxy.ts"
   );
   const executor = new GeminiCliProxyExecutor();
 
+  // Without connectionId, normalizeGeminiCliProxyProviderData throws
   const result = await executor.execute({
     model: "gemini-2.5-pro",
     body: { messages: [{ role: "user", content: "Hi" }] },
@@ -801,13 +827,13 @@ test("executor returns error response when homeDir missing", async () => {
     credentials: { providerSpecificData: {} },
   });
 
-  assert.equal(result.response.status, 400);
+  assert.equal(result.response.status, 500);
   const body = await result.response.json();
   assert.equal(body.error.code, "config_error");
-  assert.ok(body.error.message.includes("homeDir"));
+  assert.ok(body.error.message.includes("connectionId"));
 });
 
-test("executor returns error response when systemPromptPath missing", async () => {
+test("executor returns error for invalid cliPath", async () => {
   const { GeminiCliProxyExecutor } = await import(
     "../../open-sse/executors/gemini-cli-proxy.ts"
   );
@@ -818,8 +844,9 @@ test("executor returns error response when systemPromptPath missing", async () =
     body: { messages: [{ role: "user", content: "Hi" }] },
     stream: false,
     credentials: {
+      connectionId: "test-exec-conn",
       providerSpecificData: {
-        homeDir: "/tmp/test",
+        cliPath: "/nonexistent/path/gemini",
       },
     },
   });
@@ -827,7 +854,11 @@ test("executor returns error response when systemPromptPath missing", async () =
   assert.equal(result.response.status, 400);
   const body = await result.response.json();
   assert.equal(body.error.code, "config_error");
-  assert.ok(body.error.message.includes("systemPromptPath"));
+  // Cleanup auto-created session dir
+  fs.rmSync(path.join(process.cwd(), ".data", "omniroute-gemini-cli-sessions"), {
+    recursive: true,
+    force: true,
+  });
 });
 
 // ---------------------------------------------------------------------------

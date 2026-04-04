@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getProviderConnectionById } from "@/models";
 import { getAccessToken, updateProviderCredentials } from "@/sse/services/tokenRefresh";
+import { delegatesTokenManagement } from "@/shared/constants/providers";
 
 /**
  * POST /api/providers/[id]/refresh
@@ -26,6 +27,14 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       );
     }
 
+    const provider = connection.provider as string;
+    if (delegatesTokenManagement(provider)) {
+      return NextResponse.json(
+        { error: "Token refresh is managed externally by the CLI binary" },
+        { status: 400 }
+      );
+    }
+
     if (!connection.refreshToken && !connection.accessToken) {
       return NextResponse.json(
         { error: "No token credentials available for refresh" },
@@ -33,7 +42,6 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       );
     }
 
-    const provider = connection.provider as string;
     const credentials = {
       connectionId: id,
       accessToken: connection.accessToken,

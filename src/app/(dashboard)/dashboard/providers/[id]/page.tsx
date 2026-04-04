@@ -31,6 +31,7 @@ import {
   isAnthropicCompatibleProvider,
   isClaudeCodeCompatibleProvider,
   supportsApiKeyOnFreeProvider,
+  delegatesTokenManagement,
 } from "@/shared/constants/providers";
 import { getModelsByProviderId } from "@/shared/constants/models";
 import {
@@ -2316,7 +2317,9 @@ export default function ProviderDetailPage() {
                       onDelete={() => handleDelete(conn.id)}
                       onReauth={conn.authType === "oauth" ? () => setShowOAuthModal(true) : undefined}
                       onRefreshToken={
-                        conn.authType === "oauth" ? () => handleRefreshToken(conn.id) : undefined
+                        conn.authType === "oauth" && !delegatesTokenManagement(providerId)
+                          ? () => handleRefreshToken(conn.id)
+                          : undefined
                       }
                       isRefreshing={refreshingId === conn.id}
                       onApplyCodexAuthLocal={
@@ -2423,7 +2426,7 @@ export default function ProviderDetailPage() {
                               conn.authType === "oauth" ? () => setShowOAuthModal(true) : undefined
                             }
                             onRefreshToken={
-                              conn.authType === "oauth"
+                              conn.authType === "oauth" && !delegatesTokenManagement(providerId)
                                 ? () => handleRefreshToken(conn.id)
                                 : undefined
                             }
@@ -4067,6 +4070,7 @@ function ConnectionRow({
   // updates every 30s via interval only (no sync setState in effect body).
   const getTokenMinsLeft = () => {
     if (!isOAuth || !connection.expiresAt) return null;
+    if (delegatesTokenManagement(connection.provider)) return null;
     const expiresMs = new Date(connection.expiresAt).getTime();
     return Math.floor((expiresMs - Date.now()) / 60000);
   };

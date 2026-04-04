@@ -197,6 +197,88 @@ export function validateSystemPromptPath(systemPromptPath: string): string | nul
 }
 
 // ---------------------------------------------------------------------------
+// OAuth credential injection
+// ---------------------------------------------------------------------------
+
+const GEMINI_SCOPES =
+  "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
+
+/**
+ * Bootstrap Gemini CLI config with initial OAuth credentials.
+ * Only writes if oauth_creds.json doesn't exist yet — after that, the
+ * Gemini CLI manages its own token refresh cycle. Overwriting would
+ * stomp on refreshed tokens.
+ */
+export function injectGeminiCliCredentials(
+  homeDir: string,
+  credentials: {
+    accessToken?: string;
+    refreshToken?: string;
+    expiresAt?: string;
+    providerSpecificData?: Record<string, unknown>;
+  }
+): void {
+  if (!homeDir) throw new Error("homeDir is required for credential injection");
+  if (!credentials.accessToken) throw new Error("accessToken is required for credential injection");
+  if (!credentials.refreshToken) throw new Error("refreshToken is required for credential injection");
+
+  const geminiDir = path.join(homeDir, ".gemini");
+  fs.mkdirSync(geminiDir, { recursive: true, mode: 0o700 });
+
+  // Skip if CLI has already bootstrapped — it manages tokens from here on.
+  // Use open with O_EXCL | O_CREAT for atomic "create if not exists" to avoid TOCTOU races.
+  const oauthPath = path.join(geminiDir, "oauth_creds.json");
+  try {
+    const fd = fs.openSync(oauthPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
+    fs.closeSync(fd);
+  } catch (err) {
+    if (err.code === "EEXIST") return; // Already bootstrapped
+    throw new Error(`Failed to create oauth_creds.json: ${err.message}`);
+  }
+
+  const email =
+    (credentials.providerSpecificData &&
+      typeof credentials.providerSpecificData.email === "string" &&
+      credentials.providerSpecificData.email) ||
+    "";
+
+  let expiryDateMs = 0;
+  if (credentials.expiresAt) {
+    const parsed = new Date(credentials.expiresAt).getTime();
+    expiryDateMs = Number.isNaN(parsed) ? Date.now() + 3600000 : parsed;
+  }
+
+  // oauth_creds.json
+  const oauthCreds = {
+    access_token: credentials.accessToken,
+    scope: GEMINI_SCOPES,
+    token_type: "Bearer",
+    id_token: "",
+    expiry_date: expiryDateMs,
+    refresh_token: credentials.refreshToken,
+  };
+  fs.writeFileSync(oauthPath, JSON.stringify(oauthCreds), {
+    mode: 0o600,
+  });
+
+  // settings.json (always write — it just sets auth mode)
+  fs.writeFileSync(
+    path.join(geminiDir, "settings.json"),
+    JSON.stringify({ security: { auth: { selectedType: "oauth-personal" } } }),
+    { mode: 0o600 }
+  );
+
+  // google_accounts.json (only if email is available)
+  if (email) {
+    fs.writeFileSync(
+      path.join(geminiDir, "google_accounts.json"),
+      JSON.stringify({ active: email }),
+      { mode: 0o600 }
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Provider-specific data normalization
 // ---------------------------------------------------------------------------
 
@@ -208,17 +290,82 @@ function getString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+/**
+ * Auto-detect the `gemini` binary path by searching PATH.
+ * Returns the first match, or empty string if not found.
+ */
+function findGeminiBinary(): string {
+  try {
+    const pathEnv = process.env.PATH || "";
+    const dirs = pathEnv.split(path.delimiter);
+    for (const dir of dirs) {
+      const candidate = path.join(dir, "gemini");
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch {
+        // Not found or not executable in this dir
+      }
+    }
+  } catch {
+    // PATH lookup failed
+  }
+  return "";
+}
+
+/**
+ * Resolve and auto-create the Gemini CLI proxy config:
+ * - homeDir: auto-created under DATA_DIR/gemini-sessions/{connectionId}/ if not set
+ * - systemPromptPath: auto-created empty .md inside homeDir if not set
+ * - cliPath: auto-detected from PATH if not set
+ */
 export function normalizeGeminiCliProxyProviderData(
-  providerSpecificData: JsonRecord | null | undefined = {}
+  providerSpecificData: JsonRecord | null | undefined = {},
+  connectionId?: string | null
 ): JsonRecord {
   const data = providerSpecificData || {};
+  const email = getString(data.email);
+
+  // Auto-resolve homeDir under OmniRoute's .data directory.
+  // Uses connection ID as the session folder name so each OAuth account
+  // gets an isolated HOME — completely separate from ~/.gemini/.
+  let homeDir = getString(data.homeDir);
+  if (!homeDir) {
+    if (!connectionId) {
+      throw new Error("gemini-cli-proxy requires a connectionId to auto-create session directory");
+    }
+    const baseDir = path.join(process.cwd(), ".data", "omniroute-gemini-cli-sessions");
+    homeDir = path.join(baseDir, connectionId);
+  }
+
+  // Ensure homeDir and .gemini subdir exist
+  fs.mkdirSync(path.join(homeDir, ".gemini"), { recursive: true, mode: 0o700 });
+
+  // Auto-resolve systemPromptPath — create empty .md if not set
+  let systemPromptPath = getString(data.systemPromptPath);
+  if (!systemPromptPath) {
+    systemPromptPath = path.join(homeDir, ".gemini", "empty-system-prompt.md");
+    if (!fs.existsSync(systemPromptPath)) {
+      fs.writeFileSync(systemPromptPath, "", { mode: 0o600 });
+    }
+  }
+
+  // Auto-resolve cliPath — detect from PATH if not set or not absolute
+  let cliPath = getString(data.cliPath);
+  if (!cliPath || !path.isAbsolute(cliPath)) {
+    const detected = findGeminiBinary();
+    if (detected) {
+      cliPath = detected;
+    }
+  }
+
   return {
     ...data,
-    homeDir: getString(data.homeDir),
-    cliPath: getString(data.cliPath) || "gemini",
-    systemPromptPath: getString(data.systemPromptPath),
+    homeDir,
+    cliPath: cliPath || "gemini",
+    systemPromptPath,
     timeoutMs: Number(data.timeoutMs) || DEFAULT_TIMEOUT_MS,
-    email: getString(data.email),
+    email,
   };
 }
 

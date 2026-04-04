@@ -2,8 +2,8 @@ import { GEMINI_CONFIG } from "../constants/oauth";
 
 export const gemini = {
   config: GEMINI_CONFIG,
-  flowType: "authorization_code",
-  buildAuthUrl: (config, redirectUri, state) => {
+  flowType: "authorization_code_pkce",
+  buildAuthUrl: (config, redirectUri, state, codeChallenge) => {
     const params = new URLSearchParams({
       client_id: config.clientId,
       response_type: "code",
@@ -12,31 +12,22 @@ export const gemini = {
       state: state,
       access_type: "offline",
       prompt: "consent",
+      code_challenge: codeChallenge,
+      code_challenge_method: config.codeChallengeMethod,
     });
     return `${config.authorizeUrl}?${params.toString()}`;
   },
-  exchangeToken: async (config, code, redirectUri) => {
+  exchangeToken: async (config, code, redirectUri, codeVerifier) => {
     const bodyParams: Record<string, string> = {
       grant_type: "authorization_code",
       client_id: config.clientId,
       code: code,
       redirect_uri: redirectUri,
+      code_verifier: codeVerifier,
     };
 
     if (config.clientSecret) {
       bodyParams.client_secret = config.clientSecret;
-    } else {
-      // (#537) Google's OAuth2 token endpoint always requires client_secret for
-      // non-PKCE flows. Without it we get a cryptic "client_secret is missing" error.
-      // This typically happens in self-hosted / Docker deployments where
-      // GEMINI_OAUTH_CLIENT_SECRET is not set in the container environment.
-      throw new Error(
-        "Gemini CLI OAuth requires GEMINI_OAUTH_CLIENT_SECRET to be set.\n" +
-          "In Docker: add 'GEMINI_OAUTH_CLIENT_SECRET=<your-secret>' to your docker-compose.yml env.\n" +
-          "In npm: add it to ~/.omniroute/.env\n" +
-          "Obtain the client secret from https://console.cloud.google.com/apis/credentials\n" +
-          "for the same OAuth 2.0 Client ID configured as GEMINI_OAUTH_CLIENT_ID."
-      );
     }
 
     const response = await fetch(config.tokenUrl, {

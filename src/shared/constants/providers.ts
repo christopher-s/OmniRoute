@@ -21,6 +21,7 @@ export const FREE_PROVIDERS = {
     name: "Gemini CLI Proxy",
     icon: "terminal",
     color: "#4285F4",
+    delegatesTokens: true,
   },
 };
 
@@ -28,6 +29,13 @@ export const FREE_APIKEY_PROVIDER_IDS = new Set(["qoder"]);
 
 export function supportsApiKeyOnFreeProvider(providerId) {
   return FREE_APIKEY_PROVIDER_IDS.has(providerId);
+}
+
+// Providers that delegate token management to an external process (no OmniRoute refresh/health)
+export const TOKEN_DELEGATED_PROVIDERS = new Set(["gemini-cli-proxy"]);
+
+export function delegatesTokenManagement(providerId) {
+  return TOKEN_DELEGATED_PROVIDERS.has(providerId);
 }
 
 // OAuth Providers

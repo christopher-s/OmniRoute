@@ -128,6 +128,12 @@ function mapStainlessArch() {
   }
 }
 
+// ── Shared OAuth secrets (Google Gemini CLI client) ─────────────────────────
+
+const GEMINI_CLI_OAUTH_CLIENT_ID =
+  "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+const GEMINI_CLI_OAUTH_CLIENT_SECRET = "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";
+
 // ── Registry ──────────────────────────────────────────────────────────────
 
 export const REGISTRY: Record<string, RegistryEntry> = {
@@ -188,9 +194,9 @@ export const REGISTRY: Record<string, RegistryEntry> = {
     defaultContextLength: 1000000,
     oauth: {
       clientIdEnv: "GEMINI_OAUTH_CLIENT_ID",
-      clientIdDefault: "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
+      clientIdDefault: GEMINI_CLI_OAUTH_CLIENT_ID,
       clientSecretEnv: "GEMINI_OAUTH_CLIENT_SECRET",
-      clientSecretDefault: "",
+      clientSecretDefault: GEMINI_CLI_OAUTH_CLIENT_SECRET,
     },
     models: [
       { id: "gemini-3.1-pro-high", name: "Gemini 3.1 Pro High" },
@@ -225,9 +231,9 @@ export const REGISTRY: Record<string, RegistryEntry> = {
     defaultContextLength: 1000000,
     oauth: {
       clientIdEnv: "GEMINI_CLI_OAUTH_CLIENT_ID",
-      clientIdDefault: "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
+      clientIdDefault: GEMINI_CLI_OAUTH_CLIENT_ID,
       clientSecretEnv: "GEMINI_OAUTH_CLIENT_SECRET",
-      clientSecretDefault: "",
+      clientSecretDefault: GEMINI_CLI_OAUTH_CLIENT_SECRET,
     },
     models: [
       { id: "gemini-3-pro-preview", name: "Gemini 3 Pro Preview" },
@@ -250,12 +256,17 @@ export const REGISTRY: Record<string, RegistryEntry> = {
     authType: "oauth",
     authHeader: "bearer",
     defaultContextLength: 1000000,
+    oauth: {
+      clientIdEnv: "GEMINI_CLI_OAUTH_CLIENT_ID",
+      clientIdDefault: GEMINI_CLI_OAUTH_CLIENT_ID,
+      clientSecretEnv: "GEMINI_OAUTH_CLIENT_SECRET",
+      clientSecretDefault: GEMINI_CLI_OAUTH_CLIENT_SECRET,
+    },
     models: [
       { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
       { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
       { id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash Lite" },
     ],
-    passthroughModels: true,
   },
 
   codex: {

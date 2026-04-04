@@ -10,12 +10,11 @@ import {
   buildGeminiPrompt,
   createGeminiCliErrorResponse,
   extractTextFromGeminiOutput,
+  injectGeminiCliCredentials,
   normalizeGeminiCliProxyProviderData,
   parseGeminiCliFailure,
   runGeminiCliCommand,
-  validateHomeDir,
   validateCliPath,
-  validateSystemPromptPath,
 } from "../services/geminiCli.ts";
 
 export class GeminiCliProxyExecutor extends BaseExecutor {
@@ -31,7 +30,7 @@ export class GeminiCliProxyExecutor extends BaseExecutor {
   }
 
   async refreshCredentials() {
-    // Gemini CLI handles OAuth refresh internally via stored tokens in ~/.gemini-cli/
+    // Gemini CLI handles OAuth refresh internally via stored tokens in ~/.gemini/
     return null;
   }
 
@@ -46,19 +45,20 @@ export class GeminiCliProxyExecutor extends BaseExecutor {
     const headers = this.buildHeaders(credentials, false);
     mergeUpstreamExtraHeaders(headers, upstreamExtraHeaders);
 
-    const psd = normalizeGeminiCliProxyProviderData(
-      credentials.providerSpecificData || {}
-    );
-
-    const homeDir = String(psd.homeDir || "").trim();
-
-    // Validate homeDir
-    const homeDirError = validateHomeDir(homeDir);
-    if (homeDirError) {
+    // Normalize config — auto-creates homeDir, systemPromptPath, detects cliPath
+    let psd;
+    try {
+      psd = normalizeGeminiCliProxyProviderData(
+        credentials.providerSpecificData || {},
+        credentials.connectionId
+      );
+    } catch (configError) {
       return {
         response: createGeminiCliErrorResponse({
-          status: 400,
-          message: `gemini-cli-proxy config error: ${homeDirError}`,
+          status: 500,
+          message: `gemini-cli-proxy config error: ${
+            configError instanceof Error ? configError.message : String(configError)
+          }`,
           code: "config_error",
         }),
         url: "gemini-cli-proxy://local",
@@ -67,24 +67,11 @@ export class GeminiCliProxyExecutor extends BaseExecutor {
       };
     }
 
-    // Validate systemPromptPath
-    const systemPromptPath = String(psd.systemPromptPath || "").trim();
-    const promptPathError = validateSystemPromptPath(systemPromptPath);
-    if (promptPathError) {
-      return {
-        response: createGeminiCliErrorResponse({
-          status: 400,
-          message: `gemini-cli-proxy config error: ${promptPathError}`,
-          code: "config_error",
-        }),
-        url: "gemini-cli-proxy://local",
-        headers,
-        transformedBody: body,
-      };
-    }
+    const homeDir = String(psd.homeDir);
+    const systemPromptPath = String(psd.systemPromptPath);
+    const cliPath = String(psd.cliPath);
 
-    // Validate cliPath if provided
-    const cliPath = String(psd.cliPath || "gemini");
+    // Validate cliPath (only if user provided a custom absolute path that's invalid)
     const cliPathError = validateCliPath(cliPath);
     if (cliPathError) {
       return {
@@ -101,6 +88,27 @@ export class GeminiCliProxyExecutor extends BaseExecutor {
 
     const prompt = buildGeminiPrompt(body);
     const timeoutMs = Number(psd.timeoutMs) || 300_000;
+
+    // Bootstrap OAuth credentials on first use only.
+    // After initial injection, Gemini CLI manages its own token refresh.
+    if (credentials.accessToken) {
+      try {
+        injectGeminiCliCredentials(homeDir, credentials);
+      } catch (injectError) {
+        const errorMessage =
+          injectError instanceof Error ? injectError.message : String(injectError);
+        return {
+          response: createGeminiCliErrorResponse({
+            status: 500,
+            message: `gemini-cli-proxy credential injection failed: ${errorMessage}`,
+            code: "credential_injection_error",
+          }),
+          url: "gemini-cli-proxy://local",
+          headers,
+          transformedBody: body,
+        };
+      }
+    }
 
     const result = await runGeminiCliCommand({
       prompt,

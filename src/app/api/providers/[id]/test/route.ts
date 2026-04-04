@@ -87,6 +87,12 @@ const OAUTH_TEST_CONFIG = {
     checkExpiry: true,
     refreshable: true,
   },
+  "gemini-cli-proxy": {
+    url: "https://www.googleapis.com/oauth2/v1/userinfo?alt=json",
+    method: "GET",
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+  },
 };
 
 const CLI_RUNTIME_PROVIDER_MAP = {

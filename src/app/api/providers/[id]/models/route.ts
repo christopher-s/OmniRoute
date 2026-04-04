@@ -557,6 +557,60 @@ export async function GET(
       }
     }
 
+    if (provider === "gemini-cli-proxy") {
+      // gemini-cli-proxy uses Google's AI API with the OAuth access token
+      // to discover available models. Falls back to static list on failure.
+      if (!accessToken) {
+        return NextResponse.json(
+          { error: "No access token. Please complete OAuth setup first." },
+          { status: 400 }
+        );
+      }
+
+      try {
+        const modelsRes = await fetch(
+          "https://generativelanguage.googleapis.com/v1beta/models",
+          {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            signal: AbortSignal.timeout(10000),
+          }
+        );
+
+        if (!modelsRes.ok) {
+          console.log(
+            `[models] gemini-cli-proxy model fetch failed (${modelsRes.status}):`,
+            await modelsRes.text()
+          );
+          return NextResponse.json(
+            { error: `Failed to fetch models: ${modelsRes.status}` },
+            { status: modelsRes.status }
+          );
+        }
+
+        const data = await modelsRes.json();
+        const remoteModels = Array.isArray(data.models) ? data.models : [];
+        const models = remoteModels
+          .filter((m) => {
+            const name = m.name || "";
+            const methods = Array.isArray(m.supportedGenerationMethods)
+              ? m.supportedGenerationMethods
+              : [];
+            return name.includes("gemini") && methods.includes("generateContent");
+          })
+          .map((m) => ({
+            id: (m.name || "").replace(/^models\//, ""),
+            name: m.displayName || (m.name || "").replace(/^models\//, ""),
+            owned_by: "google",
+          }));
+
+        return buildResponse({ provider, connectionId, models });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log("[models] gemini-cli-proxy model fetch error:", msg);
+        return NextResponse.json({ error: "Failed to fetch models" }, { status: 500 });
+      }
+    }
+
     if (isAnthropicCompatibleProvider(provider)) {
       if (isClaudeCodeCompatibleProvider(provider)) {
         return NextResponse.json(
